@@ -1,0 +1,503 @@
+Outputs:
+  RestApiUrl:
+    Description: The URL of your REST API
+    Value:
+      Fn::Sub: https://${PollerAPI}.execute-api.${AWS::Region}.amazonaws.com/${ApiStage}
+  S3WebsiteURL:
+    Description: Click this link to test the setup!
+    Value:
+      Fn::Join:
+      - ''
+      - - Fn::GetAtt:
+          - WebsiteBucket
+          - WebsiteURL
+        - Fn::Sub: ?rest=https://${PollerAPI}.execute-api.${AWS::Region}.amazonaws.com/${ApiStage}&websocket=wss://${MyApi}.execute-api.${AWS::Region}.amazonaws.com/${PollToPushStage}
+  WebsocketApiUrl:
+    Description: The URL of your WebSocket type API
+    Value:
+      Fn::Sub: wss://${MyApi}.execute-api.${AWS::Region}.amazonaws.com/${PollToPushStage}
+Resources:
+  AllowAPIGWInvokeGetActivityStatus:
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName:
+        Ref: PollToPushGetActivityStatus
+      Principal: apigateway.amazonaws.com
+    Type: AWS::Lambda::Permission
+  AllowAPIGWInvokeLambda:
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName:
+        Ref: WSConnectFunction
+      Principal: apigateway.amazonaws.com
+    Type: AWS::Lambda::Permission
+  AllowPostConnectionPolicy:
+    Properties:
+      PolicyDocument:
+        Statement:
+        - Action: execute-api:ManageConnections
+          Effect: Allow
+          Resource: '*'
+        Version: '2012-10-17'
+      PolicyName: AllowPostToConnection
+      Roles:
+      - Ref: PollToPushRole
+    Type: AWS::IAM::Policy
+  ApiDeployment:
+    Properties:
+      Description: A deployment of the PollerAPI
+      RestApiId:
+        Ref: PollerAPI
+    Type: AWS::ApiGateway::Deployment
+  ApiStage:
+    Properties:
+      DeploymentId:
+        Ref: ApiDeployment
+      RestApiId:
+        Ref: PollerAPI
+      StageName: PollToPush
+    Type: AWS::ApiGateway::Stage
+  CreateStateMachineAndToken:
+    Properties:
+      CodeUri:
+        Bucket: <%REPO_BUCKET%>
+        Key: 06ba2804-4c66-4cda-9fc4-81646cc2d621
+      Description: 'PollToPush: Lambda function to Create StateMachine And Token'
+      Environment:
+        Variables:
+          stepfunctions_arn:
+            Fn::Sub: arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:PollToPushREST
+          worker_arn:
+            Fn::Sub: arn:aws:states:${AWS::Region}:${AWS::AccountId}:activity:OpenConnection
+      FunctionName: CreateStateMachineAndToken
+      Handler: lambda_function.lambda_handler
+      Role:
+        Fn::GetAtt:
+        - MyLambdaRole
+        - Arn
+      Runtime: python3.7
+    Type: AWS::Serverless::Function
+  CustomLambda:
+    DependsOn:
+    - PollToPushPolicy
+    - WebsiteBucket
+    - PollToPushRole
+    Properties:
+      ServiceToken:
+        Fn::GetAtt:
+        - WriteToS3
+        - Arn
+      s3-bucket:
+        Ref: WebsiteBucket
+    Type: Custom::FunctionWriteToS3
+  DynamoMapper:
+    Properties:
+      AttributeDefinitions:
+      - AttributeName: ExecutionArn
+        AttributeType: S
+      KeySchema:
+      - AttributeName: ExecutionArn
+        KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: '5'
+        WriteCapacityUnits: '5'
+      TableName: PollToPush-ExecutionMapper
+    Type: AWS::DynamoDB::Table
+  LambdaIntegration:
+    Properties:
+      ApiId:
+        Ref: MyApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri:
+        Fn::Join:
+        - ''
+        - - 'arn:aws:apigateway:'
+          - Ref: AWS::Region
+          - :lambda:path/2015-03-31/functions/
+          - Fn::GetAtt:
+            - WSConnectFunction
+            - Arn
+          - /invocations
+    Type: AWS::ApiGatewayV2::Integration
+  LambdaLayer:
+    Properties:
+      CompatibleRuntimes:
+      - python3.6
+      - python3.7
+      Content:
+        S3Bucket: <%REPO_BUCKET%>
+        S3Key: c70cd298-ae3a-48e8-9fd7-64ce1f9f8ae4
+      Description: PollToPush-Boto3-apimanagementapi
+      LayerName: PollToPush-Boto3-apimanagementapi
+      LicenseInfo: MIT
+    Type: AWS::Lambda::LayerVersion
+  LambdaMainInvokePermission:
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName:
+        Ref: CreateStateMachineAndToken
+      Principal: apigateway.amazonaws.com
+    Type: AWS::Lambda::Permission
+  MyApi:
+    Properties:
+      ApiKeySelectionExpression: $request.header.x-api-key
+      Name: PollToPush-WebSocket
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: $request.body.action
+    Type: AWS::ApiGatewayV2::Api
+  MyLambdaRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+        Version: '2012-10-17'
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      RoleName: PollToPush-CreateStateMachineAndTokenRole
+    Type: AWS::IAM::Role
+  MyRoute:
+    DependsOn:
+    - LambdaIntegration
+    Properties:
+      ApiId:
+        Ref: MyApi
+      AuthorizationType: NONE
+      RouteKey: OpenConnection
+      Target:
+        Fn::Join:
+        - /
+        - - integrations
+          - Ref: LambdaIntegration
+    Type: AWS::ApiGatewayV2::Route
+  MyStateMachine:
+    Properties:
+      DefinitionString:
+        Fn::Sub: |-
+          {
+            "Comment": "PollToPushStateMachine",
+            "StartAt": "RunAthenaQuery",
+            "States": {
+                      "RunAthenaQuery": {
+                      "Type": "Task",
+                      "Resource":"arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:PollToPush-QueryAthena",
+                      "Next" : "IssueCallback"
+                      },
+                       "IssueCallback": {
+                        "Type": "Task",
+                        "Parameters": {
+                          "myArn.$":"$$.Execution.Id",
+                          "myPayload.$":"$"
+                        },
+                        "Resource":"arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:SendMessageToClient",
+                        "Retry": [
+                          {
+                        "ErrorEquals": ["DynamoRecordDoesNotExist"],
+                        "IntervalSeconds": 5,
+                        "MaxAttempts": 5,
+                        "BackoffRate": 2.0
+                      }
+                        ],
+                        "End":true
+                      }
+            }
+          }
+      RoleArn:
+        Fn::GetAtt:
+        - StatesExecutionRole
+        - Arn
+      StateMachineName: PollToPushREST
+    Type: AWS::StepFunctions::StateMachine
+  OpenConnectionActivity:
+    Properties:
+      Name: OpenConnection
+    Type: AWS::StepFunctions::Activity
+  PollToPushBucket:
+    Type: AWS::S3::Bucket
+  PollToPushDeployment:
+    DependsOn:
+    - MyRoute
+    Properties:
+      ApiId:
+        Ref: MyApi
+      Description: My deployment
+    Type: AWS::ApiGatewayV2::Deployment
+  PollToPushGetActivityStatus:
+    Properties:
+      CodeUri:
+        Bucket: <%REPO_BUCKET%>
+        Key: 31be75f3-4cb0-4917-8908-78c32e226644
+      Description: 'PollToPush: Lambda function to GetActivityStatus or Results'
+      FunctionName: PollToPush_GetActivityStatus
+      Handler: lambda_function.lambda_handler
+      Role:
+        Fn::GetAtt:
+        - MyLambdaRole
+        - Arn
+      Runtime: python3.7
+    Type: AWS::Serverless::Function
+  PollToPushPolicy:
+    Properties:
+      PolicyDocument:
+        Fn::Sub: |-
+          { "Version": "2012-10-17", "Statement": [ { "Sid": "StepFunctionsPermissions", "Effect": "Allow", "Action": [ "states:StartExecution", "states:GetActivityTask", "states:SendTaskSuccess" ], "Resource": [ "${MyStateMachine}:*:*", "${OpenConnectionActivity}" ] },{ "Sid": "StepFunctionsDescribeExecution", "Effect": "Allow", "Action": [ "states:DescribeExecution" ], "Resource":["arn:aws:states:${AWS::Region}:${AWS::AccountId}:execution:*:*"]
+          }, { "Sid": "AllowS3ObjectInteractions", "Effect": "Allow", "Action": [ "s3:PutObject", "s3:PutObjectAcl", "s3:GetObjectAcl", "s3:GetObject", "s3:DeleteObject" ], "Resource": [ "arn:aws:s3:::${PollToPushBucket}", "arn:aws:s3:::${PollToPushBucket}/*", "arn:aws:s3:::${WebsiteBucket}", "arn:aws:s3:::${WebsiteBucket}/*", "arn:aws:s3:::aws-vpa-tweets/*" ] }, { "Sid": "AllowS3Interactions", "Effect": "Allow", "Action": [ "s3:ListBucket", "s3:ListAllMyBuckets", "s3:GetBucketLocation" ], "Resource": ["arn:aws:s3:::*"] }, { "Sid": "AllowDynamo", "Effect": "Allow", "Action": [ "dynamodb:PutItem", "dynamodb:GetItem" ], "Resource": ["arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamoMapper}"] } ] }
+      PolicyName: PollToPushPolicy
+      Roles:
+      - Ref: PollToPushRole
+    Type: AWS::IAM::Policy
+  PollToPushRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+        Version: '2012-10-17'
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      - arn:aws:iam::aws:policy/AmazonAthenaFullAccess
+      RoleName: PollToPushRole
+    Type: AWS::IAM::Role
+  PollToPushStage:
+    Properties:
+      ApiId:
+        Ref: MyApi
+      DeploymentId:
+        Ref: PollToPushDeployment
+      StageName: prod
+    Type: AWS::ApiGatewayV2::Stage
+  PollerAPI:
+    Properties:
+      Body:
+        basePath: /Demo
+        definitions:
+          Empty:
+            title: Empty Schema
+            type: object
+        host: 2u2mujkec6.execute-api.us-west-2.amazonaws.com
+        info:
+          title: CreateStateMachineAndTokenAPI
+          version: '2019-03-01T09:15:33Z'
+        paths:
+          /CreateStateMachineAndToken:
+            get:
+              parameters:
+              - in: query
+                name: ExecutionArn
+                required: true
+                type: string
+              produces:
+              - application/json
+              responses:
+                '200':
+                  description: 200 response
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: string
+                  schema:
+                    $ref: '#/definitions/Empty'
+              x-amazon-apigateway-integration:
+                contentHandling: CONVERT_TO_TEXT
+                httpMethod: POST
+                passthroughBehavior: when_no_match
+                responses:
+                  default:
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: '''*'''
+                    statusCode: '200'
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:PollToPush_GetActivityStatus/invocations
+            options:
+              consumes:
+              - application/json
+              produces:
+              - application/json
+              responses:
+                '200':
+                  description: 200 response
+                  headers:
+                    Access-Control-Allow-Headers:
+                      type: string
+                    Access-Control-Allow-Methods:
+                      type: string
+                    Access-Control-Allow-Origin:
+                      type: string
+                  schema:
+                    $ref: '#/definitions/Empty'
+              x-amazon-apigateway-integration:
+                passthroughBehavior: when_no_match
+                requestTemplates:
+                  application/json: '{"statusCode": 200}'
+                responses:
+                  default:
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Headers: '''Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'''
+                      method.response.header.Access-Control-Allow-Methods: '''POST,OPTIONS'''
+                      method.response.header.Access-Control-Allow-Origin: '''*'''
+                    statusCode: '200'
+                type: mock
+            post:
+              parameters:
+              - in: query
+                name: Country
+                required: false
+                type: string
+              produces:
+              - application/json
+              responses:
+                '200':
+                  description: 200 response
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: string
+                  schema:
+                    $ref: '#/definitions/Empty'
+              x-amazon-apigateway-integration:
+                contentHandling: CONVERT_TO_TEXT
+                httpMethod: POST
+                passthroughBehavior: when_no_match
+                responses:
+                  default:
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: '''*'''
+                    statusCode: '200'
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:CreateStateMachineAndToken/invocations
+        schemes:
+        - https
+        swagger: '2.0'
+      Description: To kick stepfunctions off.
+      Name: CreateStateMachineAndTokenAPI
+    Type: AWS::ApiGateway::RestApi
+  RunAthenaQuery:
+    Properties:
+      CodeUri:
+        Bucket: <%REPO_BUCKET%>
+        Key: 5fbe918e-e4f3-4670-9e6c-6bc8134c4915
+      Description: 'PollToPush: Lambda function to Query Athena'
+      Environment:
+        Variables:
+          athena_database: default
+          athena_query: SELECT * FROM default.tweets where tweets.country=
+          athena_table: tweets
+          create_tweets_table: CREATE EXTERNAL TABLE IF NOT EXISTS default.tweets(   id bigint COMMENT 'Tweet ID',    text string COMMENT 'Tweet text',    created timestamp COMMENT 'Tweet create timestamp',    screen_name string COMMENT 'Tweet screen_name',   screen_name_followers_count int COMMENT 'Tweet screen_name follower count',   place string COMMENT 'Location full name',   country string COMMENT 'Location country',   retweet_count int COMMENT 'Retweet count',    favorite_count int COMMENT 'Favorite count') ROW FORMAT SERDE    'org.openx.data.jsonserde.JsonSerDe'  WITH SERDEPROPERTIES (    'paths'='id,text,created,screen_name,screen_name_followers_count,place_fullname,country,retweet_count,favorite_count')  STORED AS INPUTFORMAT    'org.apache.hadoop.mapred.TextInputFormat'  OUTPUTFORMAT    'org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat' LOCATION   's3://aws-vpa-tweets/tweets/'
+          region_name:
+            Fn::Sub: ${AWS::Region}
+          s3_output_location:
+            Fn::Sub: s3://${PollToPushBucket}
+      FunctionName: PollToPush-QueryAthena
+      Handler: lambda_function.lambda_handler
+      Role:
+        Fn::GetAtt:
+        - PollToPushRole
+        - Arn
+      Runtime: python3.7
+      Timeout: 300
+    Type: AWS::Serverless::Function
+  StatesExecutionRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service:
+            - Fn::Sub: states.${AWS::Region}.amazonaws.com
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+      - PolicyDocument:
+          Statement:
+          - Action:
+            - lambda:InvokeFunction
+            Effect: Allow
+            Resource: '*'
+          Version: '2012-10-17'
+        PolicyName: StatesExecutionPolicy
+    Type: AWS::IAM::Role
+  StepFunctionLambdaPolicy:
+    Properties:
+      PolicyDocument:
+        Statement:
+        - Action:
+          - states:DescribeExecution
+          - states:StartExecution
+          - states:GetActivityTask
+          Effect: Allow
+          Resource: '*'
+        Version: '2012-10-17'
+      PolicyName: AllowPostToConnection
+      Roles:
+      - Ref: MyLambdaRole
+    Type: AWS::IAM::Policy
+  UpdateClientFunction:
+    Properties:
+      CodeUri:
+        Bucket: <%REPO_BUCKET%>
+        Key: e8f8d087-9cf8-48a3-a5ea-898959e9019c
+      Description: Will update connected client with StepFunction outcome.
+      Environment:
+        Variables:
+          callbackURL:
+            Fn::Sub: https://${MyApi}.execute-api.${AWS::Region}.amazonaws.com/${PollToPushStage}
+          stepfunctions_arn:
+            Fn::Sub: arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:PollToPushREST
+      FunctionName: SendMessageToClient
+      Handler: function.lambda_handler
+      Layers:
+      - Ref: LambdaLayer
+      Role:
+        Fn::GetAtt:
+        - PollToPushRole
+        - Arn
+      Runtime: python3.7
+    Type: AWS::Serverless::Function
+  WSConnectFunction:
+    Properties:
+      CodeUri:
+        Bucket: <%REPO_BUCKET%>
+        Key: 08e714ee-7c81-4f3d-a318-3ad87a54859a
+      Description: Function triggers OpenConnection is triggered by the websocket API
+      Environment:
+        Variables:
+          stepfunctions_arn:
+            Fn::Sub: arn:aws:states:${AWS::Region}:${AWS::AccountId}:execution:PollToPushREST
+      FunctionName: PollToPush_OpenConnection
+      Handler: lambda_function.lambda_handler
+      Role:
+        Fn::GetAtt:
+        - PollToPushRole
+        - Arn
+      Runtime: python3.7
+    Type: AWS::Serverless::Function
+  WebsiteBucket:
+    Properties:
+      AccessControl: Private
+      WebsiteConfiguration:
+        ErrorDocument: error.html
+        IndexDocument: index.html
+    Type: AWS::S3::Bucket
+  WriteToS3:
+    Properties:
+      CodeUri:
+        Bucket: <%REPO_BUCKET%>
+        Key: dbc00aa0-191c-48be-bace-2d3b160e6303
+      Description: 'PollToPush: CFN custom resource to create website.'
+      FunctionName: PollToPush-WriteIndexToS3
+      Handler: lambda_function.lambda_handler
+      Role:
+        Fn::GetAtt:
+        - PollToPushRole
+        - Arn
+      Runtime: python3.7
+      Timeout: 300
+    Type: AWS::Serverless::Function
+Transform: AWS::Serverless-2016-10-31

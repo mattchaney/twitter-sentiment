@@ -1,6 +1,6 @@
 import boto3
 
-def lambda_handler(event, context):
+def handler(event, context):
     executionArn = event['queryStringParameters']['ExecutionArn']
     client = boto3.client('stepfunctions')
     describe_response = client.describe_execution(

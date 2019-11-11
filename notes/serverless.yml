@@ -21,43 +21,17 @@ provider:
 
 functions:
   create_state_machine:
-    handler: create_state_machine/create.handler
-    events:
-      - http:
-        path: /
-        method: get
+    
   open_connection:
-    handler: open_connection/open.handler
-    events:
-      - websocket:
-          route: $connect
+    
   send_message_to_client:
-    handler: send_message/send.handler
+
+  get_activity_status:
 
   twitter_sentiment:
-    handler: twitter_sentiment/get_sentiment.handler
-    events:
-      - http:
-          path: /
-          method: get
-
 
 stepFunctions:
-  stateMachines:
-    TwitterSentiment:
-      name: TwitterSentiment
-      definition:
-        Comment: "Basic AWS Step Functions state machine"
-        StartAt: 
-        States:
-          HelloWorld1:
-            Type: Parallel
-            End: true
-            Branches:
-              StartAt: OpenConnection
-              States:
-                - OpenConnection:
-
+  stateMachine:
   {
   "Comment": "PollToPushStateMachine",
   "StartAt": "RunAthenaQuery",

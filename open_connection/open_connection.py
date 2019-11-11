@@ -4,7 +4,7 @@ import json
 client = boto3.client('stepfunctions')
 ddbClient = boto3.client('dynamodb')
 
-def lambda_handler(event, context):
+def handler(event, context):
     print(event)
     messageBody = json.loads(event['body'])
     task_token = messageBody['task_token']

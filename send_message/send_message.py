@@ -11,7 +11,8 @@ apiManagement = boto3.client('apigatewaymanagementapi', region_name=api_region,
                       endpoint_url=api_endpoint_url)
 class DynamoRecordDoesNotExist(Exception):
         pass
-def lambda_handler(event, context):
+
+def handler(event, context):
     print(vars(context))
     print("Input from invoke: " + str(event))
 
