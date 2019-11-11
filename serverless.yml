@@ -1,0 +1,145 @@
+provider:
+  name: aws
+  iamRoleStatements:
+{
+  "Version": "2012-10-17",
+  "Statement": [
+      {
+          "Action": [
+              "states:DescribeExecution",
+              "states:StartExecution",
+              "states:GetActivityTask"
+          ],
+          "Resource": "*",
+          "Effect": "Allow"
+      }
+  ]
+}
+{
+  "Version": "2012-10-17",
+  "Statement": [
+      {
+          "Sid": "StepFunctionsPermissions",
+          "Effect": "Allow",
+          "Action": [
+              "states:StartExecution",
+              "states:GetActivityTask",
+              "states:SendTaskSuccess"
+          ],
+          "Resource": [
+              "arn:aws:states:us-east-1:796187004613:stateMachine:PollToPushREST:*:*",
+              "arn:aws:states:us-east-1:796187004613:activity:OpenConnection"
+          ]
+      },
+      {
+          "Sid": "StepFunctionsDescribeExecution",
+          "Effect": "Allow",
+          "Action": [
+              "states:DescribeExecution"
+          ],
+          "Resource": [
+              "arn:aws:states:us-east-1:796187004613:execution:*:*"
+          ]
+      },
+      {
+          "Sid": "AllowS3ObjectInteractions",
+          "Effect": "Allow",
+          "Action": [
+              "s3:PutObject",
+              "s3:PutObjectAcl",
+              "s3:GetObjectAcl",
+              "s3:GetObject",
+              "s3:DeleteObject"
+          ],
+          "Resource": [
+              "arn:aws:s3:::serverlessrepo-poll-to-push-polltopushbucket-198akocv5kpvb",
+              "arn:aws:s3:::serverlessrepo-poll-to-push-polltopushbucket-198akocv5kpvb/*",
+              "arn:aws:s3:::serverlessrepo-poll-to-push-websitebucket-1s6s9gyf8t2k2",
+              "arn:aws:s3:::serverlessrepo-poll-to-push-websitebucket-1s6s9gyf8t2k2/*",
+              "arn:aws:s3:::aws-vpa-tweets/*"
+          ]
+      },
+      {
+          "Sid": "AllowS3Interactions",
+          "Effect": "Allow",
+          "Action": [
+              "s3:ListBucket",
+              "s3:ListAllMyBuckets",
+              "s3:GetBucketLocation"
+          ],
+          "Resource": [
+              "arn:aws:s3:::*"
+          ]
+      },
+      {
+          "Sid": "AllowDynamo",
+          "Effect": "Allow",
+          "Action": [
+              "dynamodb:PutItem",
+              "dynamodb:GetItem"
+          ],
+          "Resource": [
+              "arn:aws:dynamodb:us-east-1:796187004613:table/PollToPush-ExecutionMapper"
+          ]
+      }
+  ]
+}
+
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Action": [
+                "lambda:InvokeFunction"
+            ],
+            "Resource": "*",
+            "Effect": "Allow"
+        }
+    ]
+}
+
+functions:
+  create_state_machine:
+    
+  open_connection:
+    
+  send_message_to_client:
+
+  get_activity_status:
+
+  twitter_sentiment:
+
+stepFunctions:
+  stateMachine:
+  {
+  "Comment": "PollToPushStateMachine",
+  "StartAt": "RunAthenaQuery",
+  "States": {
+            "RunAthenaQuery": {
+            "Type": "Task",
+            "Resource":"arn:aws:lambda:us-east-1:796187004613:function:PollToPush-QueryAthena",
+            "Next" : "IssueCallback"
+            },
+             "IssueCallback": {
+              "Type": "Task",
+              "Parameters": {
+                "myArn.$":"$$.Execution.Id",
+                "myPayload.$":"$"
+              },
+              "Resource":"arn:aws:lambda:us-east-1:796187004613:function:SendMessageToClient",
+              "Retry": [
+                {
+              "ErrorEquals": ["DynamoRecordDoesNotExist"],
+              "IntervalSeconds": 5,
+              "MaxAttempts": 5,
+              "BackoffRate": 2.0
+            }
+              ],
+              "End":true
+            }
+  }
+}
+
+plugins:
+  - serverless-step-functions
+  - serverless-pseudo-parameters
