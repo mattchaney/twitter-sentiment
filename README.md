@@ -7,10 +7,10 @@ that outlines a better way to handle rendering the results of long-running async
 
 ## TODO
 
-- serverless configuration
-    - state machine configuration
-        - DONE
-    - lambda environment variables
+- Serverless configuration
+    - State machine configuration
+        - Example code was changed to use DynamoDB to store a mapping from a state machine execution to a web socket connection id. Parallel step functions no longer required.
+    - Lambda environment variables
         - stepfunctions_arn
             - OpenConnection
             - SendResponse
@@ -20,7 +20,7 @@ that outlines a better way to handle rendering the results of long-running async
             - GetTweets
             - GetSentiments
             - AggregateSentiments
-    - add per-function IAM statements to limit access scope
-- code each lambda
-- automatic deployment
-- dynamically set websocket and rest api endpoint in app index.html
+    - Add per-function IAM statements to limit access scope
+- Code each lambda
+- Automatic deployment
+- Dynamically set websocket and rest api endpoint in app index.html
