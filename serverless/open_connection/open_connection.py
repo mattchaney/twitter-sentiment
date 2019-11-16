@@ -12,16 +12,16 @@ def handler(event, context):
     print("Execution ARN: " + executionArn)
 
     ddbClient.put_item(
-    Item={
-        'ExecutionArn': {
-            'S': executionArn,
+        Item={
+            'ExecutionArn': {
+                'S': executionArn,
+            },
+            'WsClientId': {
+                'S': event['requestContext']['connectionId'],
+            },
         },
-        'WsClientId': {
-            'S': event['requestContext']['connectionId'],
-        },
-    },
-    TableName='PollToPush-ExecutionMapper',
-)
+        TableName='PollToPush-ExecutionMapper',
+    )
                     
     return {
         'statusCode': 200,
